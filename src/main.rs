@@ -4,7 +4,7 @@ use std::{collections::HashMap, sync::Arc};
 use std::result::Result;
 
 use datafusion::execution::runtime_env::RuntimeConfig;
-use datafusion::execution::{disk_manager::DiskManagerConfig, object_store as df_object_store, runtime_env::{RuntimeEnv, RuntimeEnvBuilder}};
+use datafusion::execution::{object_store as df_object_store, runtime_env::RuntimeEnv};
 
 use deltalake::{arrow::array::RecordBatch, DeltaOps};
 use object_store::aws::AmazonS3Builder;
@@ -135,10 +135,10 @@ async fn main() -> Result<(), PlaygroundError> {
     let delta_path = "s3://data/nyc_taxi_data/taxi_data/delta/yellow_taxi/";
 
     // Create the plan
-    let df = ctx.sql(query).await?.repartition(Partitioning::RoundRobinBatch(16))?;
+    let df = ctx.sql(query).await?;
 
     // Execute the plan into a stream
-    let record_batch: Vec<RecordBatch> = df.collect().await?; //.collect().await?;
+    let record_batch: Vec<RecordBatch> = df.collect().await?;
     let ops =
         DeltaOps::try_from_uri_with_storage_options(delta_path, storage_options.clone()).await?;
 

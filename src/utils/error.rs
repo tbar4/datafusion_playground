@@ -1,5 +1,6 @@
 use deltalake::DeltaTableError;
 use datafusion::error::DataFusionError;
+use tracing::subscriber::SetGlobalDefaultError;
 use thiserror::Error;
 
 use std::fmt;
@@ -21,4 +22,6 @@ pub enum PlaygroundError {
     DataFusionError(#[from] DataFusionError),
     #[error("Delta Table Error")]
     DeltaTableError(#[from] DeltaTableError),
+    #[error("Error Setting Global Defaults")]
+    SetGlobalDefaultError(#[from] SetGlobalDefaultError),
 }
