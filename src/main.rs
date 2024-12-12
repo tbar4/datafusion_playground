@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::path::PathBuf;
 use std::{collections::HashMap, sync::Arc};
 
@@ -7,6 +8,7 @@ use datafusion::execution::runtime_env::RuntimeConfig;
 use datafusion::execution::{object_store as df_object_store, runtime_env::RuntimeEnv};
 
 use deltalake::{arrow::array::RecordBatch, DeltaOps};
+use futures::StreamExt;
 use object_store::aws::AmazonS3Builder;
 
 use datafusion::prelude::*;
@@ -18,7 +20,7 @@ use utils::error::PlaygroundError;
 mod env_builder;
 use env_builder::s3_env_builder::*;
 
-const MEMORY_LIMIT: usize = 16 * 1024 * 1024 * 1024; // 8GB
+const MEMORY_LIMIT: usize = 16 * 1024 * 1024 * 1024; // 16GB
 
 #[tokio::main]
 async fn main() -> Result<(), PlaygroundError> {
@@ -69,7 +71,9 @@ async fn main() -> Result<(), PlaygroundError> {
     let runtime = Arc::new(RuntimeEnv::try_new(rt_config)?);
     
     // Cerate the default Session Config
-    let config = SessionConfig::new();
+    let config = SessionConfig::new()
+        .with_batch_size(128 * 1024 * 1024) // 128mb
+        .with_coalesce_batches(true);
     
     // Create the Context with config and runtime
     let ctx = SessionContext::new_with_config_rt(config, runtime);
@@ -106,12 +110,14 @@ async fn main() -> Result<(), PlaygroundError> {
     
     // 3. **** QUERY VIA SQL ****//
     // Create a table that has taxi data from 2020 and on
-    ctx.sql(table_create_query).await?.show().await?;
-
+    ctx.sql(table_create_query).await?;
+    println!("Table Created");
+    
     // Select All Yellow Taxi Data
     let query = r#"SELECT
         *
         FROM yellow_taxi
+        
         "#;
 
     // 4. **** Create the Delta Table ****//
@@ -138,11 +144,17 @@ async fn main() -> Result<(), PlaygroundError> {
     let df = ctx.sql(query).await?;
 
     // Execute the plan into a stream
-    let record_batch: Vec<RecordBatch> = df.collect().await?;
-    let ops =
-        DeltaOps::try_from_uri_with_storage_options(delta_path, storage_options.clone()).await?;
-
-    let _table = ops.write(record_batch);
+    println!("Collecting Query");
+    //let record_batch: Vec<RecordBatch> = df.collect().await?;
+    let mut stream = df.execute_stream().await?;
+    println!("Query collected");
+    
+    while let Some(record_batch) = stream.next().await {
+        let ops =
+            DeltaOps::try_from_uri_with_storage_options(delta_path, storage_options.clone()).await?;
+        ops.write([record_batch?]).await?; 
+    }
+    //let _table = ops.write(record_batch);
 
     Ok(())
 }
