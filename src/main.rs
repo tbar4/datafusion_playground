@@ -7,6 +7,7 @@ use std::result::Result;
 use datafusion::execution::runtime_env::RuntimeConfig;
 use datafusion::execution::{object_store as df_object_store, runtime_env::RuntimeEnv};
 
+use deltalake::open_table_with_storage_options;
 use deltalake::{arrow::array::RecordBatch, DeltaOps};
 use futures::StreamExt;
 use object_store::aws::AmazonS3Builder;
@@ -72,8 +73,8 @@ async fn main() -> Result<(), PlaygroundError> {
     
     // Cerate the default Session Config
     let config = SessionConfig::new()
-        .with_batch_size(128 * 1024 * 1024) // 128mb
-        .with_coalesce_batches(true);
+        .with_batch_size(256 * 1024 * 1024); // 128mb
+    //.with_coalesce_batches(true);
     
     // Create the Context with config and runtime
     let ctx = SessionContext::new_with_config_rt(config, runtime);
@@ -83,29 +84,9 @@ async fn main() -> Result<(), PlaygroundError> {
 
     // Create the query for the table creation
     let table_create_query = r#"
-            CREATE EXTERNAL TABLE yellow_taxi (
-                vendor_id VARCHAR,
-                tpep_pickup_datetime VARCHAR,
-                tpep_dropoff_datetime VARCHAR,
-                passenger_count TINYINT,
-                trip_distance FLOAT,
-                pu_location_id VARCHAR,
-                do_location_id VARCHAR,
-                ratecodeid VARCHAR,
-                store_and_fwd_flag CHAR,
-                payment_type TINYINT,
-                fare_amount FLOAT,
-                extra FLOAT,
-                mta_tax FLOAT,
-                improvement_surcharge FLOAT,
-                tip_amount FLOAT,
-                tolls_amount FLOAT,
-                total_amount FLOAT,
-                congestion_surcharge FLOAT,
-                airport_fee FLOAT,
-            )
+            CREATE EXTERNAL TABLE fhv_taxi
             STORED AS PARQUET 
-            LOCATION 's3://data/nyc_taxi_data/taxi_data/yellow_taxi/'
+            LOCATION 's3://data/nyc_taxi_data/taxi_data/green_taxi/year=2024/';
         "#;
     
     // 3. **** QUERY VIA SQL ****//
@@ -113,13 +94,20 @@ async fn main() -> Result<(), PlaygroundError> {
     ctx.sql(table_create_query).await?;
     println!("Table Created");
     
+    ctx.read_parquet("s3://data/nyc_taxi_data/taxi_data/green_taxi/", ParquetReadOptions::default()).await?.limit(0, Some(10))?.show().await?;
+    
     // Select All Yellow Taxi Data
+    /*
     let query = r#"SELECT
         *
-        FROM yellow_taxi
-        
+        --, date_part('year', "Trip_Pickup_DateTime") as year
+        FROM fhv_taxi
+        --WHERE c1 IS NOT NULL 
+        --AND tpep_pickup_datetime IS NOT NULL
+        --AND date_part('year', tpep_pickup_datetime) > 2019
+        LIMIT 20
         "#;
-
+*/
     // 4. **** Create the Delta Table ****//
     // Figuring this out took way to long and its nuts the
     // answer is buried in an issue from nearly a year ago
@@ -136,25 +124,37 @@ async fn main() -> Result<(), PlaygroundError> {
     storage_options.insert("ENDPOINT".to_string(), vars.endpoint.unwrap().to_string());
     storage_options.insert("AWS_S3_ALLOW_UNSAFE_RENAME".to_string(), "true".to_string());
     
-
     // Path to the delta table
     let delta_path = "s3://data/nyc_taxi_data/taxi_data/delta/yellow_taxi/";
 
     // Create the plan
-    let df = ctx.sql(query).await?;
-
+    //ctx.sql(query).await?.show().await?;
+    
+    //println!("{:?}", ctx.sql(query).await?.schema());
+    
     // Execute the plan into a stream
     println!("Collecting Query");
     //let record_batch: Vec<RecordBatch> = df.collect().await?;
+    /*
     let mut stream = df.execute_stream().await?;
-    println!("Query collected");
     
+    // Create the Delta Table
+    let ops =
+            DeltaOps::try_from_uri_with_storage_options(
+                delta_path, 
+                storage_options.clone()
+            )
+            .await?;
+    let delta_table = ops.0;
+    
+    // Read the batch stream
     while let Some(record_batch) = stream.next().await {
-        let ops =
-            DeltaOps::try_from_uri_with_storage_options(delta_path, storage_options.clone()).await?;
-        ops.write([record_batch?]).await?; 
+        // Wrap the table in a DeltaOps
+        let op = DeltaOps(delta_table.clone());
+        
+        // Write the Record batch
+        op.write([record_batch?]).await?; 
     }
-    //let _table = ops.write(record_batch);
-
+    */
     Ok(())
 }
